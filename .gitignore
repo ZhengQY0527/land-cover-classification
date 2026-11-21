@@ -1,0 +1,15 @@
+/data/
+/results/
+/.venv/
+/venv/
+__pycache__/
+*.py[cod]
+*.pt
+*.pth
+*.onnx
+*.zip
+*.log
+.env
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,1 @@
+{"group": "I", "seed": 42, "accuracy": 0.9548148148148148, "macro_f1": 0.9527755592073716, "parameters": 246958, "epochs": 100, "batch": 64, "manifest": "86e133b53f5eb8d94424ad2a095d48b91cfca0f709cb4f50a197811a565535eb"}
