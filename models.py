@@ -19,6 +19,26 @@ class Encoder(nn.Module):
 
 
 
+class SpatialEncoder(Encoder):
+    """Mix adjacent patch features in the expanded feed-forward representation."""
+    def __init__(self, dim):
+        super().__init__(dim)
+        hidden = dim * 2
+        self.neighborhood = nn.Conv2d(hidden, hidden, 3, padding=1, groups=hidden)
+        nn.init.zeros_(self.neighborhood.weight)
+        nn.init.zeros_(self.neighborhood.bias)
+
+    def forward(self, x, explain):
+        norm = self.norm1(x)
+        delta, weights = self.attention(norm, norm, norm, need_weights=explain)
+        x = x + delta
+        hidden = self.mlp[1](self.mlp[0](self.norm2(x)))
+        patches = hidden[:, 1:].transpose(1, 2).reshape(len(x), -1, 8, 8)
+        patches = patches + self.neighborhood(patches)
+        mixed = torch.cat((hidden[:, :1], patches.flatten(2).transpose(1, 2)), dim=1)
+        return x + self.mlp[2](mixed), weights
+
+
 class ConvTokenizer(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -33,10 +53,32 @@ class ConvTokenizer(nn.Module):
         return self.tokens(x + self.texture(x))
 
 
+class PatchReadout(nn.Module):
+    def __init__(self, dim, attention):
+        super().__init__()
+        self.score = nn.Linear(dim, 1, bias=False) if attention else None
+        self.norm = nn.LayerNorm(dim)
+        self.gate = nn.Linear(dim, 1)
+        self.predict = nn.Linear(dim, 10)
+        nn.init.zeros_(self.predict.weight)
+        nn.init.zeros_(self.predict.bias)
+        if attention:
+            nn.init.zeros_(self.score.weight)
+        self.register_buffer("scale", torch.tensor(1.))
+
+    def forward(self, patches):
+        patches = self.norm(patches)
+        if self.score is None:
+            pooled = patches.mean(1)
+        else:
+            pooled = (self.score(patches).softmax(1) * patches).sum(1)
+        return self.scale * self.gate(pooled).sigmoid() * self.predict(pooled)
+
+
 class Classifier(nn.Module):
     def __init__(self, group):
         super().__init__()
-        if group not in ('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'):
+        if group not in ('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'):
             raise ValueError(group)
         self.group = group
         dim = 96 if group in ("H", "I") else 128
@@ -53,10 +95,20 @@ class Classifier(nn.Module):
             depth = 2 if group in ('F', 'H') else 4
             if group == "I":
                 depth = 3
-            self.layers = nn.ModuleList(Encoder(dim) for _ in range(depth))
+            encoder = SpatialEncoder if group == 'J' else Encoder
+            self.layers = nn.ModuleList(encoder(dim) for _ in range(depth))
         self.head = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 10))
+        if group in ('M','N'):
+            self.patch_readout = PatchReadout(dim, attention=group=='N')
+        if group == 'L':
+            self.register_buffer('readout_threshold', torch.tensor(1.))
+            self.register_buffer('readout_scale', torch.tensor(1.))
+        if group in ('K','L'):
+            self.local_readout = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 10))
+            nn.init.zeros_(self.local_readout[1].weight)
+            nn.init.zeros_(self.local_readout[1].bias)
 
-    def forward(self, x, explain=False):
+    def forward(self, x, explain=False, return_readout_inputs=False):
         if self.group not in ('A', 'I'):
             local = self.project(self.local(x))
             if self.group in ('B', 'G'):
@@ -75,4 +127,17 @@ class Classifier(nn.Module):
                 weights = weights / weights.sum(-1, keepdim=True)
                 rollout = weights if rollout is None else weights @ rollout
         logits = self.head(tokens[:, 0])
+        if self.group in ('M','N'):
+            if return_readout_inputs:
+                return logits, tokens[:, 1:]
+            logits = logits + self.patch_readout(tokens[:, 1:])
+        if self.group in ('K','L'):
+            pooled = local.mean((2, 3))
+            if return_readout_inputs:
+                return logits, pooled
+            correction = self.local_readout(pooled)
+            if self.group == 'L':
+                confidence = logits.softmax(1).amax(1, keepdim=True)
+                correction = correction * (confidence <= self.readout_threshold) * self.readout_scale
+            logits = logits + correction
         return (logits, rollout[:, 0, 1:]) if explain else logits

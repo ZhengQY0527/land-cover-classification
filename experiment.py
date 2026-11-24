@@ -89,7 +89,7 @@ def main():
     p.add_argument('action', choices=['prepare', 'train', 'analyze', 'all'])
     p.add_argument('--data', type=Path, default=base/'data')
     p.add_argument('--out', type=Path, default=base/'results')
-    p.add_argument('--groups', nargs='+', choices=list('ABCDEFGHI'), default=list('ABCDE'))
+    p.add_argument('--groups', nargs='+', choices=list('ABCDEFGHIJ'), default=list('ABCDE'))
     p.add_argument('--seeds', nargs='+', type=int, default=[42, 43, 44])
     p.add_argument('--epochs', type=int, default=100)
     p.add_argument('--batch', type=int, default=64)

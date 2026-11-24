@@ -1,6 +1,6 @@
 # EuroSAT 地物分类：LSEVGG 与视觉 Transformer
 
-比较局部纹理、全局布局及其融合对相似地物分类的作用。本仓库包含九种网络定义、八组完整的种子 42 实验、区域遮挡实验和轻量化评估。[29 页中文报告（含网络结构、混淆矩阵、典型错例、响应图及遮挡验证）](reports/model-report-zh.pdf)
+比较局部纹理、全局布局及其融合对相似地物分类的作用。本仓库提供 A–Q 系列模型及其实验代码。下表和基础报告覆盖 A–I，J–Q 的结构与运行方式见后文。[29 页中文报告（含网络结构、混淆矩阵、典型错例、响应图及遮挡验证）](reports/model-report-zh.pdf)
 
 | 组 | 模型设计 | 参数量 | 测试准确率 |
 |---|---|---:|---:|
@@ -42,6 +42,38 @@
     python experiment.py train --groups I --seeds 42 --out results/serial
 
 相同组、种子和输出目录再次训练会更新该组结果。完整流程使用 results/ 下的 compact、lightweight、serial 子目录保存 F、G、I，各目录使用同一划分。训练默认批量 64、AdamW、学习率 0.0003、预热 5 轮、余弦退火。
+
+## J–Q 训练与评估
+
+J 在 Transformer 前馈层内加入深度卷积；K 和 L 分别使用局部分类头与置信度门控；M 和 N 比较均值与注意力池化；O 和 P 修复可检测的平坦缺块；Q 沿用 C 的结构进行遮挡蒸馏微调。以下命令在仓库根目录运行，后续实验脚本使用 CUDA。先完成上面的基础流程，或用下列命令生成 B、C 权重和四个易混类别的遮挡样本清单。已有对应输出可直接复用。
+
+    python experiment.py prepare
+    python experiment.py train --groups A B C --seeds 42
+    python experiment.py analyze --groups A B C --seeds 42
+
+J 使用与 C 相同的数据划分。在 PowerShell 中运行以下命令从头训练 J，然后比较单视图、八视图与区域遮挡。历史实验中的 J 在第 58 轮后重建过优化器，连续训练轨迹会有差异。resume_spatial.py 仅用于手头已有该历史中断备份的情形。
+
+    New-Item -ItemType Directory -Force results/spatial_resumed
+    Copy-Item results/manifest.json results/spatial_resumed/manifest.json
+    python experiment.py train --groups J --seeds 42 --out results/spatial_resumed
+    python evaluate_spatial.py --work results/spatial_resumed
+    python fusion_trial.py
+
+K、L、M、N 从 C 权重开始，O、P 对 L 的输入进行缺块修复。按以下顺序生成各版本与结果。
+
+    python train_readout.py
+    python evaluate_spatial.py --groups K --work results/readout_42
+    python calibrate_readout.py
+    python evaluate_spatial.py --groups L --work results/calibrated_readout_42
+    python evaluate_block.py
+    python patch_readout_trial.py
+    python repair_trial.py
+
+Q 可以从 C 独立微调。先生成五轮候选，再运行一轮微调与权重插值，最后评估。Q_full_step.pt 是完整一轮的鲁棒版，Q_blend.pt 是验证集选择的插值版；两者均用 Classifier("C") 加载 checkpoint 的 state 字段。O、P 用 repair_trial.Repair("O") 或 Repair("P")，将 L 的权重载入 backbone。分类输入为按 manifest 均值和标准差归一化的 64×64 RGB 图像。
+
+    python finetune_robust.py
+    python finetune_robust.py --interpolate
+    python evaluate_q.py
 
 ## 代码索引
 
